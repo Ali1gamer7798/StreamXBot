@@ -40,6 +40,26 @@ def _track_thumbnail_url(track: dict) -> str:
             return c.strip()
     return ""
 
+def _playlist_thumbnails(*, cover_url: str | None, track_thumbnails: list[str], limit: int = 4) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    cover = (cover_url or "").strip()
+    if cover:
+        out.append(cover)
+        seen.add(cover)
+
+    for u in track_thumbnails:
+        if len(out) >= int(limit):
+            break
+        u2 = (u or "").strip()
+        if not u2 or u2 in seen:
+            continue
+        out.append(u2)
+        seen.add(u2)
+
+    return out
+
 
 async def _get_playlist_or_404(playlist_id: str, user_id: int) -> dict:
     col = db_handler.get_collection("user_playlists").collection
@@ -71,6 +91,7 @@ async def create_playlist(payload: PlaylistCreate, user_id: int = Depends(requir
     return PlaylistItem(
         playlist_id=playlist_id,
         name=name,
+        thumbnails=_playlist_thumbnails(cover_url=cover.get("url"), track_thumbnails=[]),
         cover_id=cover.get("cover_id"),
         cover_url=cover.get("url"),
         created_at=now,
@@ -143,20 +164,20 @@ async def list_playlists(user_id: int = Depends(require_user_id)):
     for it in raw_items:
         pid = str(it.get("playlist_id") or "")
         ids = by_playlist.get(pid) or []
-        thumbs: list[str] = []
+        track_thumbs: list[str] = []
         for tid in ids[:4]:
             tdoc = tracks_by_id.get(tid)
             if not isinstance(tdoc, dict):
                 continue
             url = _track_thumbnail_url(tdoc)
             if url:
-                thumbs.append(url)
+                track_thumbs.append(url)
 
         items.append(
             PlaylistItem(
                 playlist_id=pid,
                 name=str(it.get("name") or ""),
-                thumbnails=thumbs,
+                thumbnails=_playlist_thumbnails(cover_url=it.get("cover_url"), track_thumbnails=track_thumbs),
                 cover_id=it.get("cover_id"),
                 cover_url=it.get("cover_url"),
                 created_at=it.get("created_at"),
@@ -183,7 +204,14 @@ async def rename_playlist(
         {"_id": playlist_id, "user_id": int(user_id)},
         {"$set": {"name": name, "cover_id": cover.get("cover_id"), "cover_url": cover.get("url"), "updated_at": now}},
     )
-    return PlaylistItem(playlist_id=playlist_id, name=name, cover_id=cover.get("cover_id"), cover_url=cover.get("url"), updated_at=now)
+    return PlaylistItem(
+        playlist_id=playlist_id,
+        name=name,
+        thumbnails=_playlist_thumbnails(cover_url=cover.get("url"), track_thumbnails=[]),
+        cover_id=cover.get("cover_id"),
+        cover_url=cover.get("url"),
+        updated_at=now,
+    )
 
 
 @router.delete("/playlists/{playlist_id}")

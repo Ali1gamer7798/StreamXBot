@@ -28,10 +28,11 @@ def _font_path() -> str:
     return os.path.join(root, "Assets", "SFPRODISPLAYBOLD.OTF")
 
 
-def generate_nice_color() -> tuple[int, int, int]:
-    hue = random.random()
-    saturation = random.uniform(0.6, 0.9)
-    value = random.uniform(0.75, 0.95)
+def generate_nice_color(rng: random.Random | None = None) -> tuple[int, int, int]:
+    r = rng or random
+    hue = r.random()
+    saturation = r.uniform(0.6, 0.9)
+    value = r.uniform(0.75, 0.95)
     r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
     return (int(r * 255), int(g * 255), int(b * 255))
 
@@ -112,8 +113,14 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def render_cover(*, top_text: str, bottom_text: str, out_path: str) -> dict[str, Any]:
-    base_color = generate_nice_color()
+def render_cover(*, top_text: str, bottom_text: str, out_path: str, base_color: tuple[int, int, int] | None = None, seed_id: str | None = None) -> dict[str, Any]:
+    if base_color is None:
+        if isinstance(seed_id, str) and seed_id.strip():
+            seed = int(hashlib.sha1(seed_id.strip().encode("utf-8", errors="ignore")).hexdigest()[:8], 16)
+            rng = random.Random(seed)
+            base_color = generate_nice_color(rng)
+        else:
+            base_color = generate_nice_color()
 
     scale = 4
     size = int(CARD_SIZE * scale)
@@ -245,6 +252,8 @@ async def ensure_cover(
     kind: str,
     folder: str = "covers",
     force: bool = False,
+    base_color: tuple[int, int, int] | None = None,
+    seed_id: str | None = None,
 ) -> dict[str, Any]:
     cover_id = (cover_id or "").strip()
     if not cover_id:
@@ -261,17 +270,19 @@ async def ensure_cover(
             out["cloud_url"] = existing_cloud.strip()
             out["local_path"] = existing.get("local_path") if isinstance(existing.get("local_path"), str) else None
             out["url"] = existing_cloud.strip()
+            out["color"] = existing.get("color")
             return out
         out = {"cover_id": cover_id, "file_key": existing.get("file_key") or file_key}
         out["cloud_url"] = existing.get("cloud_url") if isinstance(existing.get("cloud_url"), str) else None
         out["local_path"] = existing.get("local_path") if isinstance(existing.get("local_path"), str) else None
         out["url"] = existing.get("url") if isinstance(existing.get("url"), str) else None
+        out["color"] = existing.get("color")
         force = True
 
     out_dir = _gen_covers_dir()
     filename = f"{file_key}.png"
     out_path = os.path.join(out_dir, filename)
-    render = render_cover(top_text=top_text, bottom_text=bottom_text, out_path=out_path)
+    render = render_cover(top_text=top_text, bottom_text=bottom_text, out_path=out_path, base_color=base_color, seed_id=seed_id)
 
     cloud_url = upload_to_cloudinary(file_path=out_path, folder=folder, public_id=file_key)
     url = cloud_url
@@ -295,10 +306,10 @@ async def ensure_cover(
         },
         upsert=True,
     )
-    return {"cover_id": cover_id, "file_key": file_key, "cloud_url": cloud_url, "local_path": out_path, "url": url}
+    return {"cover_id": cover_id, "file_key": file_key, "cloud_url": cloud_url, "local_path": out_path, "url": url, "color": render.get("color")}
 
 
-async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | None, force: bool = False) -> dict[str, Any]:
+def _daily_playlist_meta(*, key: str, date: str, channel_id: int | None) -> tuple[str, str, str, str, str]:
     key2 = (key or "").strip().lower()
     if key2 in {"random", "mix", "daily", "daily-playlist"}:
         key2 = "random"
@@ -330,6 +341,11 @@ async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | 
         top_text = "Surprise Me"
     else:
         top_text = "Daily Playlist"
+    return key2, date2, scope, cover_id, top_text
+
+
+async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | None, force: bool = False) -> dict[str, Any]:
+    key2, date2, scope, cover_id, top_text = _daily_playlist_meta(key=key, date=date, channel_id=channel_id)
     bottom_text = ""
 
     return await ensure_cover(
@@ -339,6 +355,83 @@ async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | 
         kind="daily_playlist",
         folder="covers",
         force=bool(force),
+    )
+
+
+async def ensure_daily_playlist_normal_cover(*, key: str, date: str, channel_id: int | None, force: bool = False) -> dict[str, Any]:
+    key2, date2, scope, base_cover_id, _ = _daily_playlist_meta(key=key, date=date, channel_id=channel_id)
+    base = await ensure_daily_playlist_cover(key=key2, date=date2, channel_id=channel_id, force=False)
+    color = base.get("color") if isinstance(base, dict) else None
+    rgb: tuple[int, int, int] | None = None
+    if isinstance(color, (list, tuple)) and len(color) == 3:
+        try:
+            rgb = (int(color[0]), int(color[1]), int(color[2]))
+        except Exception:
+            rgb = None
+    cover_id = f"daily-normal:{date2}:{key2}:{scope}"
+    if not force and rgb is not None:
+        try:
+            col = db_handler.get_collection("covers").collection
+            existing = await col.find_one({"_id": cover_id}, {"color": 1})
+            existing_color = existing.get("color") if isinstance(existing, dict) else None
+            existing_rgb: tuple[int, int, int] | None = None
+            if isinstance(existing_color, (list, tuple)) and len(existing_color) == 3:
+                try:
+                    existing_rgb = (int(existing_color[0]), int(existing_color[1]), int(existing_color[2]))
+                except Exception:
+                    existing_rgb = None
+            if existing_rgb is not None and existing_rgb != rgb:
+                force = True
+        except Exception:
+            pass
+    return await ensure_cover(
+        cover_id=cover_id,
+        top_text="",
+        bottom_text="",
+        kind="daily_playlist_normal",
+        folder="covers",
+        force=bool(force),
+        base_color=rgb,
+        seed_id=base_cover_id,
+    )
+
+
+async def ensure_user_top_played_normal_cover(*, user_id: int, force: bool = False) -> dict[str, Any]:
+    uid = int(user_id)
+    base_cover_id = f"user-top-played:{uid}"
+    base = await ensure_user_top_played_cover(user_id=int(uid), force=False)
+    color = base.get("color") if isinstance(base, dict) else None
+    rgb: tuple[int, int, int] | None = None
+    if isinstance(color, (list, tuple)) and len(color) == 3:
+        try:
+            rgb = (int(color[0]), int(color[1]), int(color[2]))
+        except Exception:
+            rgb = None
+    cover_id = f"user-top-played-normal:{uid}"
+    if not force and rgb is not None:
+        try:
+            col = db_handler.get_collection("covers").collection
+            existing = await col.find_one({"_id": cover_id}, {"color": 1})
+            existing_color = existing.get("color") if isinstance(existing, dict) else None
+            existing_rgb: tuple[int, int, int] | None = None
+            if isinstance(existing_color, (list, tuple)) and len(existing_color) == 3:
+                try:
+                    existing_rgb = (int(existing_color[0]), int(existing_color[1]), int(existing_color[2]))
+                except Exception:
+                    existing_rgb = None
+            if existing_rgb is not None and existing_rgb != rgb:
+                force = True
+        except Exception:
+            pass
+    return await ensure_cover(
+        cover_id=cover_id,
+        top_text="",
+        bottom_text="",
+        kind="user_top_played_normal",
+        folder="covers",
+        force=bool(force),
+        base_color=rgb,
+        seed_id=base_cover_id,
     )
 
 

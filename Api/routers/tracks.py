@@ -8,10 +8,16 @@ from Api.deps.db import get_audio_tracks_collection
 from Api.schemas.browse import BrowseResponse
 from Api.schemas.playlists import AvailablePlaylistItem, AvailablePlaylistsResponse
 from Api.schemas.track import TrackResponse
-from Api.services.genColor import ensure_daily_playlist_cover, ensure_user_top_played_cover
 from Api.services.lyrics_service import get_track_lyrics
 from Api.services.stream_service import stream_track, warm_track_cached
-from Api.services.track_service import get_daily_playlist, get_track_by_id, random_tracks, search_tracks
+from Api.services.track_service import (
+    get_daily_playlist,
+    get_daily_playlist_thumbnail_info,
+    get_track_by_id,
+    get_user_top_played_thumbnail_info,
+    random_tracks,
+    search_tracks,
+)
 from Api.utils.auth import verify_auth_token
 from stream.database.MongoDb import db_handler
 
@@ -144,14 +150,16 @@ async def available_playlists(request: Request):
     for key, name in daily_defs:
         if not await _has_daily_playlist_tracks(key=key):
             continue
-        cover = await ensure_daily_playlist_cover(key=key, date=today, channel_id=None, force=False)
-        url = cover.get("url") if isinstance(cover, dict) else None
+        info = await get_daily_playlist_thumbnail_info(key=key, date=today, channel_id=None, limit=4)
+        url = info.get("cover_url") if isinstance(info, dict) else None
+        normal = info.get("normal_thumbnail") if isinstance(info, dict) else None
         items.append(
             AvailablePlaylistItem(
                 id=f"daily:{key}",
                 kind="daily",
                 name=name,
                 thumbnail_url=url,
+                normal_thumbnail=normal,
                 endpoint=f"/daily-playlist/{key}",
                 requires_auth=False,
             )
@@ -162,14 +170,16 @@ async def available_playlists(request: Request):
         ucol = db_handler.userplayback_collection.collection
         if not await ucol.find_one({"user_id": int(user_id)}, {"_id": 1}):
             return AvailablePlaylistsResponse(items=items)
-        cover = await ensure_user_top_played_cover(user_id=int(user_id), force=False)
-        url = cover.get("url") if isinstance(cover, dict) else None
+        info = await get_user_top_played_thumbnail_info(user_id=int(user_id), limit=4)
+        url = info.get("cover_url") if isinstance(info, dict) else None
+        normal = info.get("normal_thumbnail") if isinstance(info, dict) else None
         items.append(
             AvailablePlaylistItem(
                 id="me:top-played",
                 kind="me_top_played",
                 name="Top Played",
                 thumbnail_url=url,
+                normal_thumbnail=normal,
                 endpoint="/me/top-played",
                 requires_auth=True,
             )

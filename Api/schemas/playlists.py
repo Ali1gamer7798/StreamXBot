@@ -41,6 +41,7 @@ class AvailablePlaylistItem(BaseModel):
     kind: str
     name: str
     thumbnail_url: str | None = None
+    normal_thumbnail: str | None = None
     endpoint: str
     requires_auth: bool = False
 

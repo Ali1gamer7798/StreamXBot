@@ -239,6 +239,51 @@ async def get_browse_items_by_ids(track_ids: list[str]) -> list[BrowseItem]:
         items.append(_browse_item_from_doc(d))
     return items
 
+async def get_daily_playlist_thumbnail_info(
+    *,
+    key: str,
+    date: str,
+    channel_id: int | None,
+    limit: int = 4,
+) -> dict[str, object]:
+    from Api.services.genColor import ensure_daily_playlist_cover, ensure_daily_playlist_normal_cover
+
+    k = _canon_daily_playlist_key(key)
+    d = (date or "").strip()
+    cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=False)
+    cover_url = cover.get("url") if isinstance(cover, dict) else None
+    normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False)
+    normal_url = normal.get("url") if isinstance(normal, dict) else None
+
+    return {
+        "key": k,
+        "date": d,
+        "channel_id": int(channel_id) if channel_id is not None else None,
+        "cover_url": cover_url,
+        "normal_thumbnail": normal_url,
+    }
+
+
+async def get_user_top_played_thumbnail_info(*, user_id: int, limit: int = 4) -> dict[str, object]:
+    from Api.services.genColor import ensure_user_top_played_cover, ensure_user_top_played_normal_cover
+
+    uid = int(user_id)
+    cache_col = db_handler.get_collection("user_top_played_cache").collection
+    cached = await cache_col.find_one({"_id": str(uid)}, {"_id": 0, "track_ids": 1, "cover_url": 1})
+
+    cover_url: str | None = None
+    if isinstance(cached, dict) and isinstance(cached.get("cover_url"), str) and cached["cover_url"].strip():
+        cover_url = cached["cover_url"].strip()
+    else:
+        cover = await ensure_user_top_played_cover(user_id=int(uid), force=False)
+        if isinstance(cover, dict) and isinstance(cover.get("url"), str) and cover["url"].strip():
+            cover_url = cover["url"].strip()
+
+    normal = await ensure_user_top_played_normal_cover(user_id=int(uid), force=False)
+    normal_url = normal.get("url") if isinstance(normal, dict) else None
+
+    return {"user_id": uid, "cover_url": cover_url, "normal_thumbnail": normal_url}
+
 def _daily_playlist_seed(*, key: str, date: str, channel_id: int | None) -> int:
     scope = str(int(channel_id)) if channel_id is not None else ""
     seed_src = f"{key}|{date}|{scope}".encode("utf-8", errors="ignore")
@@ -583,11 +628,22 @@ async def refresh_daily_playlist_cache(
     track_ids = await generate_daily_playlist(key=k, date=d, channel_id=channel_id, limit=int(limit))
 
     cover_url = None
+    normal_thumbnail = None
     if refresh_cover:
-        from Api.services.genColor import ensure_daily_playlist_cover
+        from Api.services.genColor import ensure_daily_playlist_cover, ensure_daily_playlist_normal_cover
 
         cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=True)
         cover_url = cover.get("url") if isinstance(cover, dict) else None
+        normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=True)
+        normal_thumbnail = normal.get("url") if isinstance(normal, dict) else None
+    else:
+        try:
+            from Api.services.genColor import ensure_daily_playlist_normal_cover
+
+            normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False)
+            normal_thumbnail = normal.get("url") if isinstance(normal, dict) else None
+        except Exception:
+            normal_thumbnail = None
 
     return {
         "key": k,
@@ -595,6 +651,7 @@ async def refresh_daily_playlist_cache(
         "channel_id": int(channel_id) if channel_id is not None else None,
         "track_count": len(track_ids),
         "cover_url": cover_url,
+        "normal_thumbnail": normal_thumbnail,
     }
 
 

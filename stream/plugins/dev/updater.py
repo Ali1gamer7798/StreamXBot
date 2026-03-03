@@ -77,8 +77,9 @@ async def _has_config_access(user_id: int) -> bool:
 async def graceful_restart():
     try:
         LOGGER(__name__).info("Stopping client...")
-        await bot.stop()
-        LOGGER(__name__).info("Client stopped.")
+        if bot is not None:
+            await bot.stop()
+            LOGGER(__name__).info("Client stopped.")
     except Exception as e:
         LOGGER(__name__).error(f"Error during graceful stop: {e}")
     finally:
@@ -183,7 +184,6 @@ async def pull_updates(msg=None):
         LOGGER(__name__).exception("Exception during update")
         return None
 
-@bot.on_message(filters.command("update"))
 async def update(_, message: Message):
     msg = await message.reply_text("Checking for updates...", quote=True)
     info = await check_for_updates()
@@ -205,6 +205,8 @@ async def update(_, message: Message):
     asyncio.create_task(graceful_restart())
 
 async def restart_notification():
+    if bot is None:
+        return
     try:
         files = sorted(glob.glob(f"{RESTART_PREFIX}*"), key=lambda p: os.path.getmtime(p))
         if not files:
@@ -253,7 +255,6 @@ async def restart_notification():
     except Exception as e:
         LOGGER(__name__).error(f"restart_notification failed: {e}")
 
-@bot.on_message(filters.command("restart"))
 async def restart_bot(_, message: Message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id or not await _has_config_access(user_id):
@@ -265,7 +266,6 @@ async def restart_bot(_, message: Message):
     ]
     await message.reply("How would you like to proceed?", reply_markup=InlineKeyboardMarkup(buttons))
 
-@bot.on_callback_query(filters.regex("^confirm_restart"))
 async def handle_restart_confirmation(_, callback_query):
     user_id = callback_query.from_user.id if callback_query.from_user else None
     if not user_id or not await _has_config_access(user_id):
@@ -318,3 +318,8 @@ async def handle_restart_confirmation(_, callback_query):
         LOGGER(__name__).error(f"Failed writing restart file: {e}")
     
     asyncio.create_task(graceful_restart())
+
+if bot is not None:
+    bot.on_message(filters.command("update"))(update)
+    bot.on_message(filters.command("restart"))(restart_bot)
+    bot.on_callback_query(filters.regex("^confirm_restart"))(handle_restart_confirmation)
