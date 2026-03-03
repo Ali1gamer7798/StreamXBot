@@ -4,9 +4,10 @@ import time
 from typing import Any
 import colorsys
 import random
+from io import BytesIO
 
 import requests
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
 
 from stream.database.MongoDb import db_handler
 from stream.core.config_manager import Config
@@ -35,6 +36,120 @@ def generate_nice_color(rng: random.Random | None = None) -> tuple[int, int, int
     value = r.uniform(0.75, 0.95)
     r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
     return (int(r * 255), int(g * 255), int(b * 255))
+
+def _is_college_enabled() -> bool:
+    try:
+        return bool(getattr(Config, "COLLEGE", False))
+    except Exception:
+        return False
+
+def _parse_hex_color(value: str) -> tuple[int, int, int] | None:
+    s = (value or "").strip()
+    if not s:
+        return None
+    if s.startswith("#"):
+        s = s[1:]
+    if len(s) == 3:
+        s = "".join([c * 2 for c in s])
+    if len(s) != 6:
+        return None
+    try:
+        r = int(s[0:2], 16)
+        g = int(s[2:4], 16)
+        b = int(s[4:6], 16)
+        return (r, g, b)
+    except Exception:
+        return None
+
+def _text_color_hex() -> str | None:
+    try:
+        raw = getattr(Config, "TEXT_COLOR", None)
+    except Exception:
+        raw = None
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s.startswith("#"):
+        s = s[1:]
+    if len(s) == 3:
+        s = "".join([c * 2 for c in s])
+    if len(s) != 6:
+        return None
+    return f"#{s.upper()}"
+
+def _text_color_rgb() -> tuple[int, int, int]:
+    hx = _text_color_hex()
+    rgb = _parse_hex_color(hx or "")
+    return rgb if rgb is not None else (0, 0, 0)
+
+def _collage_hash(urls: list[str]) -> str:
+    norm = []
+    for u in urls or []:
+        if isinstance(u, str) and u.strip():
+            norm.append(u.strip())
+    raw = ("\n".join(norm)).encode("utf-8", errors="ignore")
+    return hashlib.sha1(raw).hexdigest()
+
+def _fetch_image(url: str, *, timeout: int = 10) -> Image.Image | None:
+    u = (url or "").strip()
+    if not u:
+        return None
+    try:
+        resp = requests.get(u, timeout=timeout)
+        if resp.status_code != 200 or not resp.content:
+            return None
+        img = Image.open(BytesIO(resp.content))
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        return img
+    except Exception:
+        return None
+
+def _make_blurred_collage(
+    *,
+    urls: list[str],
+    size: int,
+    seed_id: str | None,
+    base_color: tuple[int, int, int] | None,
+    blur_radius: int,
+) -> Image.Image | None:
+    srcs: list[Image.Image] = []
+    for u in (urls or [])[:4]:
+        img = _fetch_image(u)
+        if img is not None:
+            srcs.append(img)
+
+    if not srcs:
+        return None
+
+    rng = None
+    if isinstance(seed_id, str) and seed_id.strip():
+        seed = int(hashlib.sha1(seed_id.strip().encode("utf-8", errors="ignore")).hexdigest()[:8], 16)
+        rng = random.Random(seed)
+
+    fallback = base_color
+    if fallback is None:
+        fallback = generate_nice_color(rng)
+
+    bg = Image.new("RGB", (size, size), fallback)
+    cell = size // 2
+    for i in range(4):
+        x = (i % 2) * cell
+        y = (i // 2) * cell
+        if i < len(srcs):
+            im = srcs[i]
+            im = im.convert("RGB") if im.mode != "RGB" else im
+            tile = ImageOps.fit(im, (cell, cell), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        else:
+            tile = Image.new("RGB", (cell, cell), fallback)
+        bg.paste(tile, (x, y))
+
+    enh = ImageEnhance.Color(bg)
+    bg = enh.enhance(1.15)
+    bg = bg.filter(ImageFilter.GaussianBlur(int(blur_radius)))
+    return bg
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int, max_lines: int) -> list[str]:
@@ -113,7 +228,15 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
-def render_cover(*, top_text: str, bottom_text: str, out_path: str, base_color: tuple[int, int, int] | None = None, seed_id: str | None = None) -> dict[str, Any]:
+def render_cover(
+    *,
+    top_text: str,
+    bottom_text: str,
+    out_path: str,
+    base_color: tuple[int, int, int] | None = None,
+    seed_id: str | None = None,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     if base_color is None:
         if isinstance(seed_id, str) and seed_id.strip():
             seed = int(hashlib.sha1(seed_id.strip().encode("utf-8", errors="ignore")).hexdigest()[:8], 16)
@@ -127,7 +250,21 @@ def render_cover(*, top_text: str, bottom_text: str, out_path: str, base_color: 
     radius = int(CORNER_RADIUS * scale)
 
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    card = Image.new("RGBA", (size, size), base_color + (255,))
+    card_rgb: Image.Image | None = None
+    if _is_college_enabled() and collage_urls:
+        card_rgb = _make_blurred_collage(
+            urls=collage_urls,
+            size=size,
+            seed_id=seed_id,
+            base_color=base_color,
+            blur_radius=int(70 * scale),
+        )
+    if card_rgb is None:
+        card = Image.new("RGBA", (size, size), base_color + (255,))
+    else:
+        card = card_rgb.convert("RGBA")
+        overlay = Image.new("RGBA", (size, size), (0, 0, 0, 80))
+        card = Image.alpha_composite(card, overlay)
 
     depth = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     depth_draw = ImageDraw.Draw(depth)
@@ -160,9 +297,10 @@ def render_cover(*, top_text: str, bottom_text: str, out_path: str, base_color: 
     top_lines = _split_words_into_lines(draw, top_text, font_top, max_width, 2)
     bottom_lines = _split_words_into_lines(draw, bottom_text, font_bottom, max_width, 2) if (bottom_text or "").strip() else []
 
+    text_fill = _text_color_rgb()
     y = top_y
     for ln in top_lines:
-        draw.text((margin_x, y), ln, fill=(0, 0, 0), font=font_top)
+        draw.text((margin_x, y), ln, fill=text_fill, font=font_top)
         bbox = draw.textbbox((0, 0), ln, font=font_top)
         y += (bbox[3] - bbox[1]) + line_spacing
 
@@ -175,7 +313,7 @@ def render_cover(*, top_text: str, bottom_text: str, out_path: str, base_color: 
         bottom_y = size - bottom_margin - bottom_block_h
         y2 = bottom_y
         for i, ln in enumerate(bottom_lines):
-            draw.text((margin_x, y2), ln, fill=(0, 0, 0), font=font_bottom)
+            draw.text((margin_x, y2), ln, fill=text_fill, font=font_bottom)
             y2 += bottom_heights[i] + line_spacing
 
     out_img = canvas.resize((CARD_SIZE, CARD_SIZE), resample=Image.Resampling.LANCZOS)
@@ -254,6 +392,7 @@ async def ensure_cover(
     force: bool = False,
     base_color: tuple[int, int, int] | None = None,
     seed_id: str | None = None,
+    collage_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     cover_id = (cover_id or "").strip()
     if not cover_id:
@@ -263,26 +402,52 @@ async def ensure_cover(
 
     col = db_handler.get_collection("covers").collection
     existing = await col.find_one({"_id": cover_id})
+    want_collage = bool(_is_college_enabled() and collage_urls)
+    collage_sig = _collage_hash(collage_urls or []) if want_collage else None
+    has_text = bool((top_text or "").strip() or (bottom_text or "").strip())
+    want_text_color = _text_color_hex() if has_text else None
     if isinstance(existing, dict) and not force:
-        existing_cloud = existing.get("cloud_url")
-        if isinstance(existing_cloud, str) and existing_cloud.strip():
+        if want_collage:
+            existing_sig = existing.get("collage_hash")
+            if isinstance(existing_sig, str) and existing_sig.strip() and existing_sig.strip() != str(collage_sig):
+                force = True
+            elif existing.get("bg_mode") != "collage":
+                force = True
+        if has_text:
+            existing_tc = existing.get("text_color")
+            if want_text_color is not None and str(existing_tc or "").strip().upper() != want_text_color:
+                force = True
+        if not force:
+            existing_cloud = existing.get("cloud_url")
+            if isinstance(existing_cloud, str) and existing_cloud.strip():
+                out = {"cover_id": cover_id, "file_key": existing.get("file_key") or file_key}
+                out["cloud_url"] = existing_cloud.strip()
+                out["local_path"] = existing.get("local_path") if isinstance(existing.get("local_path"), str) else None
+                out["url"] = existing_cloud.strip()
+                out["color"] = existing.get("color")
+                out["bg_mode"] = existing.get("bg_mode")
+                out["text_color"] = existing.get("text_color")
+                return out
             out = {"cover_id": cover_id, "file_key": existing.get("file_key") or file_key}
-            out["cloud_url"] = existing_cloud.strip()
+            out["cloud_url"] = existing.get("cloud_url") if isinstance(existing.get("cloud_url"), str) else None
             out["local_path"] = existing.get("local_path") if isinstance(existing.get("local_path"), str) else None
-            out["url"] = existing_cloud.strip()
+            out["url"] = existing.get("url") if isinstance(existing.get("url"), str) else None
             out["color"] = existing.get("color")
-            return out
-        out = {"cover_id": cover_id, "file_key": existing.get("file_key") or file_key}
-        out["cloud_url"] = existing.get("cloud_url") if isinstance(existing.get("cloud_url"), str) else None
-        out["local_path"] = existing.get("local_path") if isinstance(existing.get("local_path"), str) else None
-        out["url"] = existing.get("url") if isinstance(existing.get("url"), str) else None
-        out["color"] = existing.get("color")
-        force = True
+            out["bg_mode"] = existing.get("bg_mode")
+            out["text_color"] = existing.get("text_color")
+            force = True
 
     out_dir = _gen_covers_dir()
     filename = f"{file_key}.png"
     out_path = os.path.join(out_dir, filename)
-    render = render_cover(top_text=top_text, bottom_text=bottom_text, out_path=out_path, base_color=base_color, seed_id=seed_id)
+    render = render_cover(
+        top_text=top_text,
+        bottom_text=bottom_text,
+        out_path=out_path,
+        base_color=base_color,
+        seed_id=seed_id,
+        collage_urls=collage_urls if want_collage else None,
+    )
 
     cloud_url = upload_to_cloudinary(file_path=out_path, folder=folder, public_id=file_key)
     url = cloud_url
@@ -300,13 +465,25 @@ async def ensure_cover(
                 "cloud_url": cloud_url,
                 "url": url,
                 "color": render.get("color"),
+                "bg_mode": "collage" if want_collage else "solid",
+                "collage_hash": collage_sig if want_collage else None,
+                "text_color": want_text_color,
                 "updated_at": now,
             },
             "$setOnInsert": {"created_at": now},
         },
         upsert=True,
     )
-    return {"cover_id": cover_id, "file_key": file_key, "cloud_url": cloud_url, "local_path": out_path, "url": url, "color": render.get("color")}
+    return {
+        "cover_id": cover_id,
+        "file_key": file_key,
+        "cloud_url": cloud_url,
+        "local_path": out_path,
+        "url": url,
+        "color": render.get("color"),
+        "bg_mode": "collage" if want_collage else "solid",
+        "text_color": want_text_color,
+    }
 
 
 def _daily_playlist_meta(*, key: str, date: str, channel_id: int | None) -> tuple[str, str, str, str, str]:
@@ -344,7 +521,14 @@ def _daily_playlist_meta(*, key: str, date: str, channel_id: int | None) -> tupl
     return key2, date2, scope, cover_id, top_text
 
 
-async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | None, force: bool = False) -> dict[str, Any]:
+async def ensure_daily_playlist_cover(
+    *,
+    key: str,
+    date: str,
+    channel_id: int | None,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     key2, date2, scope, cover_id, top_text = _daily_playlist_meta(key=key, date=date, channel_id=channel_id)
     bottom_text = ""
 
@@ -355,12 +539,21 @@ async def ensure_daily_playlist_cover(*, key: str, date: str, channel_id: int | 
         kind="daily_playlist",
         folder="covers",
         force=bool(force),
+        seed_id=cover_id,
+        collage_urls=collage_urls,
     )
 
 
-async def ensure_daily_playlist_normal_cover(*, key: str, date: str, channel_id: int | None, force: bool = False) -> dict[str, Any]:
+async def ensure_daily_playlist_normal_cover(
+    *,
+    key: str,
+    date: str,
+    channel_id: int | None,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     key2, date2, scope, base_cover_id, _ = _daily_playlist_meta(key=key, date=date, channel_id=channel_id)
-    base = await ensure_daily_playlist_cover(key=key2, date=date2, channel_id=channel_id, force=False)
+    base = await ensure_daily_playlist_cover(key=key2, date=date2, channel_id=channel_id, force=False, collage_urls=collage_urls)
     color = base.get("color") if isinstance(base, dict) else None
     rgb: tuple[int, int, int] | None = None
     if isinstance(color, (list, tuple)) and len(color) == 3:
@@ -393,13 +586,19 @@ async def ensure_daily_playlist_normal_cover(*, key: str, date: str, channel_id:
         force=bool(force),
         base_color=rgb,
         seed_id=base_cover_id,
+        collage_urls=collage_urls,
     )
 
 
-async def ensure_user_top_played_normal_cover(*, user_id: int, force: bool = False) -> dict[str, Any]:
+async def ensure_user_top_played_normal_cover(
+    *,
+    user_id: int,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     uid = int(user_id)
     base_cover_id = f"user-top-played:{uid}"
-    base = await ensure_user_top_played_cover(user_id=int(uid), force=False)
+    base = await ensure_user_top_played_cover(user_id=int(uid), force=False, collage_urls=collage_urls)
     color = base.get("color") if isinstance(base, dict) else None
     rgb: tuple[int, int, int] | None = None
     if isinstance(color, (list, tuple)) and len(color) == 3:
@@ -432,10 +631,17 @@ async def ensure_user_top_played_normal_cover(*, user_id: int, force: bool = Fal
         force=bool(force),
         base_color=rgb,
         seed_id=base_cover_id,
+        collage_urls=collage_urls,
     )
 
 
-async def ensure_user_playlist_cover(*, playlist_id: str, name: str, force: bool = False) -> dict[str, Any]:
+async def ensure_user_playlist_cover(
+    *,
+    playlist_id: str,
+    name: str,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     pid = (playlist_id or "").strip()
     cover_id = f"user-playlist:{pid}"
     top_text = (name or "").strip() or "Playlist"
@@ -447,10 +653,17 @@ async def ensure_user_playlist_cover(*, playlist_id: str, name: str, force: bool
         kind="user_playlist",
         folder="covers",
         force=bool(force),
+        seed_id=cover_id,
+        collage_urls=collage_urls,
     )
 
 
-async def ensure_user_top_played_cover(*, user_id: int, force: bool = False) -> dict[str, Any]:
+async def ensure_user_top_played_cover(
+    *,
+    user_id: int,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
     uid = int(user_id)
     cover_id = f"user-top-played:{uid}"
     return await ensure_cover(
@@ -460,6 +673,8 @@ async def ensure_user_top_played_cover(*, user_id: int, force: bool = False) -> 
         kind="user_top_played",
         folder="covers",
         force=bool(force),
+        seed_id=cover_id,
+        collage_urls=collage_urls,
     )
 
 

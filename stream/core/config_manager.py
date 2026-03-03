@@ -33,6 +33,8 @@ class Config:
     SUDO_USERS = [] 
     SECRET_KEY = ""
     DEBUG = ""
+    COLLEGE = True
+    TEXT_COLOR = "#FFFFFF"
     CLOUDINARY_CLOUD_NAME = ""
     CLOUDINARY_API_KEY = ""
     CLOUDINARY_API_SECRET = ""

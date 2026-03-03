@@ -173,13 +173,25 @@ async def list_playlists(user_id: int = Depends(require_user_id)):
             if url:
                 track_thumbs.append(url)
 
+        cover = await ensure_user_playlist_cover(playlist_id=pid, name=str(it.get("name") or ""), force=False, collage_urls=track_thumbs[:4])
+        cover_url = cover.get("url") if isinstance(cover, dict) else it.get("cover_url")
+        cover_id = cover.get("cover_id") if isinstance(cover, dict) else it.get("cover_id")
+        if cover_url and (cover_url != it.get("cover_url") or cover_id != it.get("cover_id")):
+            try:
+                await db_handler.get_collection("user_playlists").collection.update_one(
+                    {"_id": pid, "user_id": int(user_id)},
+                    {"$set": {"cover_id": cover_id, "cover_url": cover_url, "updated_at": time.time()}},
+                )
+            except Exception:
+                pass
+
         items.append(
             PlaylistItem(
                 playlist_id=pid,
                 name=str(it.get("name") or ""),
-                thumbnails=_playlist_thumbnails(cover_url=it.get("cover_url"), track_thumbnails=track_thumbs),
-                cover_id=it.get("cover_id"),
-                cover_url=it.get("cover_url"),
+                thumbnails=_playlist_thumbnails(cover_url=cover_url, track_thumbnails=track_thumbs),
+                cover_id=cover_id,
+                cover_url=cover_url,
                 created_at=it.get("created_at"),
                 updated_at=it.get("updated_at"),
             )

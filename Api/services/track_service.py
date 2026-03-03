@@ -250,9 +250,14 @@ async def get_daily_playlist_thumbnail_info(
 
     k = _canon_daily_playlist_key(key)
     d = (date or "").strip()
-    cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=False)
+
+    track_ids = await generate_daily_playlist(key=k, date=d, channel_id=channel_id, limit=4)
+    items = await get_browse_items_by_ids(track_ids[:4])
+    collage_urls = [(it.cover_url or "").strip() for it in (items or []) if (it.cover_url or "").strip()]
+
+    cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=False, collage_urls=collage_urls)
     cover_url = cover.get("url") if isinstance(cover, dict) else None
-    normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False)
+    normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False, collage_urls=collage_urls)
     normal_url = normal.get("url") if isinstance(normal, dict) else None
 
     return {
@@ -271,15 +276,21 @@ async def get_user_top_played_thumbnail_info(*, user_id: int, limit: int = 4) ->
     cache_col = db_handler.get_collection("user_top_played_cache").collection
     cached = await cache_col.find_one({"_id": str(uid)}, {"_id": 0, "track_ids": 1, "cover_url": 1})
 
+    track_ids: list[str] = []
+    if isinstance(cached, dict) and isinstance(cached.get("track_ids"), list) and cached["track_ids"]:
+        track_ids = [str(x) for x in cached["track_ids"] if str(x)]
+    items = await get_browse_items_by_ids(track_ids[:4])
+    collage_urls = [(it.cover_url or "").strip() for it in (items or []) if (it.cover_url or "").strip()]
+
     cover_url: str | None = None
     if isinstance(cached, dict) and isinstance(cached.get("cover_url"), str) and cached["cover_url"].strip():
         cover_url = cached["cover_url"].strip()
     else:
-        cover = await ensure_user_top_played_cover(user_id=int(uid), force=False)
+        cover = await ensure_user_top_played_cover(user_id=int(uid), force=False, collage_urls=collage_urls)
         if isinstance(cover, dict) and isinstance(cover.get("url"), str) and cover["url"].strip():
             cover_url = cover["url"].strip()
 
-    normal = await ensure_user_top_played_normal_cover(user_id=int(uid), force=False)
+    normal = await ensure_user_top_played_normal_cover(user_id=int(uid), force=False, collage_urls=collage_urls)
     normal_url = normal.get("url") if isinstance(normal, dict) else None
 
     return {"user_id": uid, "cover_url": cover_url, "normal_thumbnail": normal_url}
@@ -627,20 +638,23 @@ async def refresh_daily_playlist_cache(
 
     track_ids = await generate_daily_playlist(key=k, date=d, channel_id=channel_id, limit=int(limit))
 
+    cover_items = await get_browse_items_by_ids(track_ids[:4])
+    collage_urls = [(it.cover_url or "").strip() for it in (cover_items or []) if (it.cover_url or "").strip()]
+
     cover_url = None
     normal_thumbnail = None
     if refresh_cover:
         from Api.services.genColor import ensure_daily_playlist_cover, ensure_daily_playlist_normal_cover
 
-        cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=True)
+        cover = await ensure_daily_playlist_cover(key=k, date=d, channel_id=channel_id, force=True, collage_urls=collage_urls)
         cover_url = cover.get("url") if isinstance(cover, dict) else None
-        normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=True)
+        normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=True, collage_urls=collage_urls)
         normal_thumbnail = normal.get("url") if isinstance(normal, dict) else None
     else:
         try:
             from Api.services.genColor import ensure_daily_playlist_normal_cover
 
-            normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False)
+            normal = await ensure_daily_playlist_normal_cover(key=k, date=d, channel_id=channel_id, force=False, collage_urls=collage_urls)
             normal_thumbnail = normal.get("url") if isinstance(normal, dict) else None
         except Exception:
             normal_thumbnail = None
@@ -725,23 +739,36 @@ async def refresh_user_top_played_cache(*, user_id: int, limit: int = 500, refre
         if tid:
             track_ids.append(tid)
 
+    cover_items = await get_browse_items_by_ids(track_ids[:4])
+    collage_urls = [(it.cover_url or "").strip() for it in (cover_items or []) if (it.cover_url or "").strip()]
+
     cache_col = db_handler.get_collection("user_top_played_cache").collection
     now = float(time.time())
     cover_id: str | None = None
     cover_url: str | None = None
+    normal_thumbnail: str | None = None
     if refresh_cover:
-        from Api.services.genColor import ensure_user_top_played_cover
+        from Api.services.genColor import ensure_user_top_played_cover, ensure_user_top_played_normal_cover
 
-        cover = await ensure_user_top_played_cover(user_id=int(uid), force=bool(force_cover))
+        cover = await ensure_user_top_played_cover(user_id=int(uid), force=bool(force_cover), collage_urls=collage_urls)
         cover_id = cover.get("cover_id") if isinstance(cover, dict) else None
         cover_url = cover.get("url") if isinstance(cover, dict) else None
+        normal = await ensure_user_top_played_normal_cover(user_id=int(uid), force=bool(force_cover), collage_urls=collage_urls)
+        normal_thumbnail = normal.get("url") if isinstance(normal, dict) else None
     await cache_col.update_one(
         {"_id": str(uid)},
-        {"$set": {"user_id": int(uid), "track_ids": track_ids, "generated_at": now, "cover_id": cover_id, "cover_url": cover_url}},
+        {"$set": {"user_id": int(uid), "track_ids": track_ids, "generated_at": now, "cover_id": cover_id, "cover_url": cover_url, "normal_thumbnail": normal_thumbnail}},
         upsert=True,
     )
 
-    return {"user_id": int(uid), "track_count": len(track_ids), "generated_at": now, "cover_id": cover_id, "cover_url": cover_url}
+    return {
+        "user_id": int(uid),
+        "track_count": len(track_ids),
+        "generated_at": now,
+        "cover_id": cover_id,
+        "cover_url": cover_url,
+        "normal_thumbnail": normal_thumbnail,
+    }
 
 
 async def refresh_user_top_played_cache_bulk(
