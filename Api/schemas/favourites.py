@@ -17,6 +17,7 @@ class FavouritesResponse(BaseModel):
     per_page: int
     total: int
     items: list[FavouriteItem]
+    last_updated_at: float | None = None
 
 
 class FavouriteIdsResponse(BaseModel):

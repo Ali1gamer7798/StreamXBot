@@ -656,6 +656,56 @@ async def ensure_user_playlist_cover(
         seed_id=cover_id,
         collage_urls=collage_urls,
     )
+async def ensure_user_playlist_normal_cover(
+    *,
+    playlist_id: str,
+    name: str,
+    force: bool = False,
+    collage_urls: list[str] | None = None,
+) -> dict[str, Any]:
+    pid = (playlist_id or "").strip()
+    base_cover_id = f"user-playlist:{pid}"
+    base = await ensure_user_playlist_cover(
+        playlist_id=pid,
+        name=name,
+        force=False,
+        collage_urls=collage_urls,
+    )
+    color = base.get("color") if isinstance(base, dict) else None
+    rgb: tuple[int, int, int] | None = None
+    if isinstance(color, (list, tuple)) and len(color) == 3:
+        try:
+            rgb = (int(color[0]), int(color[1]), int(color[2]))
+        except Exception:
+            rgb = None
+    cover_id = f"user-playlist-normal:{pid}"
+    if not force and rgb is not None:
+        try:
+            col = db_handler.get_collection("covers").collection
+            existing = await col.find_one({"_id": cover_id}, {"color": 1})
+            existing_color = existing.get("color") if isinstance(existing, dict) else None
+            existing_rgb: tuple[int, int, int] | None = None
+            if isinstance(existing_color, (list, tuple)) and len(existing_color) == 3:
+                try:
+                    existing_rgb = (int(existing_color[0]), int(existing_color[1]), int(existing_color[2]))
+                except Exception:
+                    existing_rgb = None
+            if existing_rgb is not None and existing_rgb != rgb:
+                force = True
+        except Exception:
+            pass
+    return await ensure_cover(
+        cover_id=cover_id,
+        top_text="",
+        bottom_text="",
+        kind="user_playlist_normal",
+        folder="covers",
+        force=bool(force),
+        base_color=rgb,
+        seed_id=base_cover_id,
+        collage_urls=collage_urls,
+    )
+
 
 
 async def ensure_user_top_played_cover(

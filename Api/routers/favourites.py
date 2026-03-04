@@ -60,18 +60,25 @@ async def list_favourites(
     total = await col.count_documents(query)
 
     cursor = (
-        col.find(query, {"_id": 0, "track_id": 1, "created_at": 1})
+        col.find(query, {"_id": 0, "track_id": 1, "created_at": 1, "updated_at": 1})
         .sort([("created_at", -1)])
         .skip(skip)
         .limit(per_page)
     )
 
     fav_rows: list[dict] = []
+    last_ts: float | None = None
     async for doc in cursor:
         tid = (doc.get("track_id") or "").strip()
         if not tid:
             continue
         fav_rows.append({"track_id": tid, "created_at": doc.get("created_at")})
+        ts = doc.get("updated_at")
+        if ts is None:
+            ts = doc.get("created_at")
+        if isinstance(ts, (int, float)):
+            if last_ts is None or float(ts) > float(last_ts):
+                last_ts = float(ts)
 
     tracks = await get_tracks_by_ids([r["track_id"] for r in fav_rows])
     by_id = {str(t.get("_id")): t for t in tracks if t.get("_id")}
@@ -81,7 +88,7 @@ async def list_favourites(
         if not t:
             continue
         items.append(FavouriteItem(track=t, created_at=r.get("created_at")))
-    return FavouritesResponse(page=page, per_page=per_page, total=total, items=items)
+    return FavouritesResponse(page=page, per_page=per_page, total=total, items=items, last_updated_at=last_ts)
 
 
 @router.get("/favourites/ids", response_model=FavouriteIdsResponse)

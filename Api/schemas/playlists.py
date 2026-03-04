@@ -16,6 +16,7 @@ class PlaylistItem(BaseModel):
     name: str
     thumbnails: list[str] = []
     cover_url: str | None = None
+    normal_thumbnail: str | None = None
     cover_id: str | None = None
     created_at: float | None = None
     updated_at: float | None = None

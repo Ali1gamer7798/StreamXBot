@@ -11,7 +11,7 @@ from Api.schemas.playlists import (
     PlaylistTracksResponse,
     PlaylistsResponse,
 )
-from Api.services.genColor import ensure_user_playlist_cover
+from Api.services.genColor import ensure_user_playlist_cover, ensure_user_playlist_normal_cover
 from Api.services.track_service import get_track_by_id, get_tracks_by_ids
 from Api.utils.auth import require_user_id
 from stream.database.MongoDb import db_handler
@@ -78,6 +78,7 @@ async def create_playlist(payload: PlaylistCreate, user_id: int = Depends(requir
     now = time.time()
     playlist_id = uuid.uuid4().hex
     cover = await ensure_user_playlist_cover(playlist_id=playlist_id, name=name, force=True)
+    normal_cover = await ensure_user_playlist_normal_cover(playlist_id=playlist_id, name=name, force=True)
     doc = {
         "_id": playlist_id,
         "user_id": int(user_id),
@@ -94,6 +95,7 @@ async def create_playlist(payload: PlaylistCreate, user_id: int = Depends(requir
         thumbnails=_playlist_thumbnails(cover_url=cover.get("url"), track_thumbnails=[]),
         cover_id=cover.get("cover_id"),
         cover_url=cover.get("url"),
+        normal_thumbnail=normal_cover.get("url"),
         created_at=now,
         updated_at=now,
     )
@@ -174,8 +176,10 @@ async def list_playlists(user_id: int = Depends(require_user_id)):
                 track_thumbs.append(url)
 
         cover = await ensure_user_playlist_cover(playlist_id=pid, name=str(it.get("name") or ""), force=False, collage_urls=track_thumbs[:4])
+        normal_cover = await ensure_user_playlist_normal_cover(playlist_id=pid, name=str(it.get("name") or ""), force=False, collage_urls=track_thumbs[:4])
         cover_url = cover.get("url") if isinstance(cover, dict) else it.get("cover_url")
         cover_id = cover.get("cover_id") if isinstance(cover, dict) else it.get("cover_id")
+        normal_thumbnail = normal_cover.get("url") if isinstance(normal_cover, dict) else None
         if cover_url and (cover_url != it.get("cover_url") or cover_id != it.get("cover_id")):
             try:
                 await db_handler.get_collection("user_playlists").collection.update_one(
@@ -192,6 +196,7 @@ async def list_playlists(user_id: int = Depends(require_user_id)):
                 thumbnails=_playlist_thumbnails(cover_url=cover_url, track_thumbnails=track_thumbs),
                 cover_id=cover_id,
                 cover_url=cover_url,
+                normal_thumbnail=normal_thumbnail,
                 created_at=it.get("created_at"),
                 updated_at=it.get("updated_at"),
             )
@@ -212,6 +217,7 @@ async def rename_playlist(
     await _get_playlist_or_404(playlist_id, user_id)
     now = time.time()
     cover = await ensure_user_playlist_cover(playlist_id=playlist_id, name=name, force=True)
+    normal_cover = await ensure_user_playlist_normal_cover(playlist_id=playlist_id, name=name, force=True)
     await db_handler.get_collection("user_playlists").collection.update_one(
         {"_id": playlist_id, "user_id": int(user_id)},
         {"$set": {"name": name, "cover_id": cover.get("cover_id"), "cover_url": cover.get("url"), "updated_at": now}},
@@ -222,6 +228,7 @@ async def rename_playlist(
         thumbnails=_playlist_thumbnails(cover_url=cover.get("url"), track_thumbnails=[]),
         cover_id=cover.get("cover_id"),
         cover_url=cover.get("url"),
+        normal_thumbnail=normal_cover.get("url"),
         updated_at=now,
     )
 
