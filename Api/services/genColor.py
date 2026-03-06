@@ -1,6 +1,7 @@
 import hashlib
 import os
 import time
+import asyncio
 from typing import Any
 import colorsys
 import random
@@ -382,6 +383,35 @@ def upload_to_cloudinary(*, file_path: str, folder: str, public_id: str) -> str 
     return secure_url.strip()
 
 
+async def _render_cover_async(
+    *,
+    top_text: str,
+    bottom_text: str,
+    out_path: str,
+    base_color: tuple[int, int, int] | None,
+    seed_id: str | None,
+    collage_urls: list[str] | None,
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        render_cover,
+        top_text=top_text,
+        bottom_text=bottom_text,
+        out_path=out_path,
+        base_color=base_color,
+        seed_id=seed_id,
+        collage_urls=collage_urls,
+    )
+
+
+async def _upload_to_cloudinary_async(*, file_path: str, folder: str, public_id: str) -> str | None:
+    return await asyncio.to_thread(
+        upload_to_cloudinary,
+        file_path=file_path,
+        folder=folder,
+        public_id=public_id,
+    )
+
+
 async def ensure_cover(
     *,
     cover_id: str,
@@ -440,7 +470,7 @@ async def ensure_cover(
     out_dir = _gen_covers_dir()
     filename = f"{file_key}.png"
     out_path = os.path.join(out_dir, filename)
-    render = render_cover(
+    render = await _render_cover_async(
         top_text=top_text,
         bottom_text=bottom_text,
         out_path=out_path,
@@ -449,7 +479,7 @@ async def ensure_cover(
         collage_urls=collage_urls if want_collage else None,
     )
 
-    cloud_url = upload_to_cloudinary(file_path=out_path, folder=folder, public_id=file_key)
+    cloud_url = await _upload_to_cloudinary_async(file_path=out_path, folder=folder, public_id=file_key)
     url = cloud_url
 
     now = time.time()

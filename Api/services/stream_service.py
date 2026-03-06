@@ -3,6 +3,7 @@ import asyncio
 import time
 import logging
 import hashlib
+from urllib.parse import quote
 from dataclasses import dataclass, field
 from collections import deque
 from typing import AsyncIterator, Optional
@@ -274,6 +275,55 @@ def _parse_range_header(value: str) -> tuple[int | None, int | None]:
     if end is not None and end < start:
         return None, None
     return start, end
+
+
+def _guess_extension(mime_type: str) -> str:
+    mt = (mime_type or "").strip().lower()
+    if mt in {"audio/mpeg", "audio/mp3"}:
+        return ".mp3"
+    if mt in {"audio/flac", "audio/x-flac"}:
+        return ".flac"
+    if mt in {"audio/wav", "audio/x-wav", "audio/wave"}:
+        return ".wav"
+    if mt in {"audio/ogg", "application/ogg"}:
+        return ".ogg"
+    if mt in {"audio/aac"}:
+        return ".aac"
+    if mt in {"audio/mp4", "audio/m4a", "audio/x-m4a"}:
+        return ".m4a"
+    return ".mp3"
+
+
+def _build_download_filename(*, track_id: str, audio: dict, telegram: dict, mime_type: str) -> str:
+    title = (audio.get("title") or telegram.get("title") or "").strip()
+    artist = (audio.get("artist") or audio.get("performer") or telegram.get("artist") or "").strip()
+    if artist and title:
+        raw = f"{artist} - {title}"
+    elif title:
+        raw = title
+    else:
+        raw = f"track-{str(track_id or '').strip()[:12]}"
+    raw = re.sub(r"\s+", " ", raw).strip()
+    cleaned = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", raw)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._-")
+    if not cleaned:
+        cleaned = f"track-{str(track_id or '').strip()[:12]}"
+    ext = _guess_extension(mime_type)
+    lower = cleaned.lower()
+    if not lower.endswith(ext):
+        cleaned = f"{cleaned}{ext}"
+    return cleaned
+
+
+def _content_disposition_header(*, filename: str, track_id: str, mime_type: str) -> str:
+    ext = _guess_extension(mime_type)
+    fallback = re.sub(r"[^A-Za-z0-9._ -]+", "", filename or "").strip()
+    if not fallback:
+        fallback = f"track-{str(track_id or '').strip()[:12]}{ext}"
+    if not fallback.lower().endswith(ext):
+        fallback = f"{fallback}{ext}"
+    encoded = quote(filename or fallback, safe="")
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _request_fingerprint(request: Request) -> str:
@@ -1004,6 +1054,68 @@ async def stream_track(track_id: str, request: Request):
         bitrate_kbps=bitrate_kbps,
     )
     return StreamingResponse(wrapped, status_code=status_code, headers=headers, media_type=mime_type)
+
+
+async def download_track(track_id: str):
+    if bool(getattr(Config, "ONLY_API", False)) or bot is None:
+        raise HTTPException(status_code=503, detail="streaming disabled")
+    col = get_audio_tracks_collection()
+    doc = await col.find_one(
+        {"_id": track_id},
+        projection={"telegram": 1, "audio": 1, "file_size": 1, "source_chat_id": 1, "source_message_id": 1},
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    telegram = doc.get("telegram") or {}
+    audio = doc.get("audio") if isinstance(doc.get("audio"), dict) else {}
+    file_id = (telegram.get("file_id") or "").strip()
+
+    source_chat_id = doc.get("source_chat_id")
+    source_message_id = doc.get("source_message_id")
+    try:
+        if source_chat_id is not None:
+            source_chat_id = int(source_chat_id)
+    except Exception:
+        source_chat_id = None
+    try:
+        if source_message_id is not None:
+            source_message_id = int(source_message_id)
+    except Exception:
+        source_message_id = None
+
+    if not file_id and (source_chat_id is None or source_message_id is None):
+        raise HTTPException(status_code=404, detail="Track source unavailable")
+
+    mime_type = (telegram.get("mime_type") or "audio/mpeg").strip() or "audio/mpeg"
+    filename = _build_download_filename(track_id=track_id, audio=audio, telegram=telegram, mime_type=mime_type)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": _content_disposition_header(filename=filename, track_id=track_id, mime_type=mime_type),
+    }
+
+    file_size: Optional[int] = None
+    try:
+        if telegram.get("file_size") is not None:
+            file_size = int(telegram.get("file_size"))
+    except Exception:
+        file_size = None
+    if file_size is None:
+        try:
+            if doc.get("file_size") is not None:
+                file_size = int(doc.get("file_size"))
+        except Exception:
+            file_size = None
+    if file_size is not None and file_size > 0:
+        headers["Content-Length"] = str(file_size)
+
+    iterator = _stream_file_id(
+        file_id=file_id or track_id,
+        source_chat_id=source_chat_id,
+        source_message_id=source_message_id,
+        start_byte=0,
+    )
+    return StreamingResponse(iterator, status_code=200, headers=headers, media_type=mime_type)
 
 
 async def warm_track_cached(track_id: str) -> dict:

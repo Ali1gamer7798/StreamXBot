@@ -9,7 +9,7 @@ from Api.schemas.browse import BrowseResponse
 from Api.schemas.playlists import AvailablePlaylistItem, AvailablePlaylistsResponse
 from Api.schemas.track import TrackResponse
 from Api.services.lyrics_service import get_track_lyrics
-from Api.services.stream_service import stream_track, warm_track_cached
+from Api.services.stream_service import download_track, stream_track, warm_track_cached
 from Api.services.track_service import (
     get_daily_playlist,
     get_daily_playlist_thumbnail_info,
@@ -232,6 +232,11 @@ async def track_stream(track_id: str, request: Request):
 @router.head("/tracks/{track_id}/stream")
 async def track_stream_head(track_id: str, request: Request):
     return await stream_track(track_id, request)
+
+
+@router.get("/tracks/{track_id}/download")
+async def track_download(track_id: str):
+    return await download_track(track_id)
 
 
 @router.get("/tracks/{track_id}/warm")
